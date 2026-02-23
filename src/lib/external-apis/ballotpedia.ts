@@ -60,6 +60,41 @@ export interface BallotpediaUpcomingMeasure {
   billNumber?: string;  // Legislative bill number (e.g. "SB 42", "SCA 1")
 }
 
+/**
+ * Decode HTML entities in a string.
+ * Handles numeric entities (&#58; &#36; &#44;) and common named entities.
+ */
+function decodeHtmlEntities(text: string): string {
+  return text
+    // Numeric decimal entities: &#58; → ':'
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
+    // Numeric hex entities: &#x3A; → ':'
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    // Common named entities
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '–')
+    .replace(/&mdash;/g, '—')
+    .replace(/&lsquo;/g, '\u2018')
+    .replace(/&rsquo;/g, '\u2019')
+    .replace(/&ldquo;/g, '\u201c')
+    .replace(/&rdquo;/g, '\u201d');
+}
+
+/**
+ * Extract only the proposition description from a raw cell text,
+ * stopping before "Fiscal Impact", "Supporters", or "Opponents" sections.
+ */
+function extractDescription(rawText: string): string {
+  const cutoff = rawText.search(/\b(?:Fiscal Impact|Supporters|Opponents)\s*:/i);
+  const trimmed = cutoff !== -1 ? rawText.slice(0, cutoff) : rawText;
+  return trimmed.replace(/\s+/g, ' ').trim();
+}
+
 class BallotpediaClient {
   private baseUrl: string;
   private resultsCache: Map<number, BallotpediaYearResults> = new Map();
@@ -211,15 +246,16 @@ class BallotpediaClient {
       const measureUrl = titleLinkMatch[1].startsWith('http')
         ? titleLinkMatch[1]
         : `${this.baseUrl}${titleLinkMatch[1]}`;
-      const title = titleLinkMatch[2].replace(/<[^>]+>/g, '').trim();
+      const title = decodeHtmlEntities(titleLinkMatch[2].replace(/<[^>]+>/g, '')).trim();
 
       if (!title || title.length < 5) continue;
 
       // Extract subject from third cell
-      const subject = cells[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const subject = decodeHtmlEntities(cells[2].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
 
-      // Extract description from fourth cell
-      const description = cells[3].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      // Extract description from fourth cell: strip tags, decode entities, truncate at section markers
+      const rawDescription = decodeHtmlEntities(cells[3].replace(/<[^>]+>/g, ''));
+      const description = extractDescription(rawDescription);
 
       measures.push({ title, type, subject, description, url: measureUrl });
     }

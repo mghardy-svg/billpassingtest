@@ -10,9 +10,8 @@ import {
   PropositionQueryParams,
   ApiResponse,
   PropositionCategory,
-  BallotWordingAnalysis,
 } from '@/types';
-import { caSosClient, calAccessClient, ballotpediaClient } from '@/lib/external-apis';
+import { caSosClient, calAccessClient } from '@/lib/external-apis';
 
 class PropositionService {
   private cache: Map<string, { data: unknown; timestamp: number }> = new Map();
@@ -89,16 +88,11 @@ class PropositionService {
         };
       }
 
-      // Fetch additional data in parallel from APIs
-      const [finance, ballotAnalysis] = await Promise.all([
-        this.getFinanceData(number, year),
-        this.getBallotAnalysis(proposition),
-      ]);
+      const finance = await this.getFinanceData(number, year);
 
       const withDetails: PropositionWithDetails = {
         ...proposition,
         finance: finance || undefined,
-        ballotAnalysis: ballotAnalysis || undefined,
       };
 
       return { data: withDetails, success: true };
@@ -266,20 +260,6 @@ class PropositionService {
     }
 
     return null;
-  }
-
-  private async getBallotAnalysis(proposition: Proposition): Promise<BallotWordingAnalysis | null> {
-    try {
-      const analysis = ballotpediaClient.analyzeBallotWording(
-        proposition.title,
-        proposition.summary,
-        proposition.fullText
-      );
-      analysis.propositionId = proposition.id;
-      return analysis;
-    } catch {
-      return null;
-    }
   }
 
   private filterPropositions(

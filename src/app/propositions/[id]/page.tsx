@@ -368,53 +368,6 @@ export default function PropositionDetailPage({ params }: PageProps) {
                     </CardContent>
                   </Card>
 
-                  {proposition.ballotAnalysis && (
-                    <Card className="border-2 border-gray-200">
-                      <CardHeader className="border-b border-gray-200">
-                        <CardTitle className="text-xl font-bold text-gray-900">Ballot Language Analysis</CardTitle>
-                      </CardHeader>
-                      <CardContent className="pt-6">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                          <div className="text-center p-4 bg-gray-50 rounded border border-gray-200">
-                            <p className="text-2xl font-bold text-blue-900">
-                              {proposition.ballotAnalysis.wordCount}
-                            </p>
-                            <p className="text-sm text-gray-600 font-medium">Words</p>
-                          </div>
-                          <div className="text-center p-4 bg-gray-50 rounded border border-gray-200">
-                            <p className="text-2xl font-bold text-blue-900">
-                              {proposition.ballotAnalysis.readabilityScore}
-                            </p>
-                            <p className="text-sm text-gray-600 font-medium">Readability</p>
-                          </div>
-                          <div className="text-center p-4 bg-gray-50 rounded border border-gray-200">
-                            <p className="text-2xl font-bold text-blue-900 capitalize">
-                              {proposition.ballotAnalysis.complexity}
-                            </p>
-                            <p className="text-sm text-gray-600 font-medium">Complexity</p>
-                          </div>
-                          <div className="text-center p-4 bg-gray-50 rounded border border-gray-200">
-                            <p className={`text-2xl font-bold ${proposition.ballotAnalysis.sentimentScore > 0 ? 'text-green-700' : proposition.ballotAnalysis.sentimentScore < 0 ? 'text-red-700' : 'text-gray-900'}`}>
-                              {proposition.ballotAnalysis.sentimentScore > 0 ? '+' : ''}
-                              {proposition.ballotAnalysis.sentimentScore.toFixed(1)}
-                            </p>
-                            <p className="text-sm text-gray-600 font-medium">Sentiment</p>
-                          </div>
-                        </div>
-
-                        <div>
-                          <h4 className="font-bold text-gray-900 mb-3">Key Phrases</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {proposition.ballotAnalysis.keyPhrases.map((phrase) => (
-                              <Badge key={phrase} className="bg-blue-900 text-white border-0">
-                                {phrase}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
                 </div>
 
                 <div className="space-y-6">

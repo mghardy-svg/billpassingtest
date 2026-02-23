@@ -14,6 +14,28 @@
 import { Proposition, PropositionCategory, PropositionResult, PropositionStatus } from '@/types';
 import { ballotpediaClient } from './ballotpedia';
 
+/**
+ * Decode HTML entities in a string extracted from scraped HTML.
+ * Handles numeric entities (&#58; &#36; &#44;) and common named entities.
+ */
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '–')
+    .replace(/&mdash;/g, '—')
+    .replace(/&lsquo;/g, '\u2018')
+    .replace(/&rsquo;/g, '\u2019')
+    .replace(/&ldquo;/g, '\u201c')
+    .replace(/&rdquo;/g, '\u201d');
+}
+
 // California Secretary of State Quick Guide to Props
 const CA_SOS_QUICK_GUIDE = 'https://quickguidetoprops.sos.ca.gov/propositions';
 
@@ -220,7 +242,7 @@ class CASosClient {
     for (const pattern of summaryPatterns) {
       const match = html.match(pattern);
       if (match) {
-        const text = match[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        const text = decodeHtmlEntities(match[1].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
         if (text.length > 20) { summary = text; break; }
       }
     }
@@ -235,7 +257,7 @@ class CASosClient {
     for (const pattern of fiscalPatterns) {
       const match = html.match(pattern);
       if (match) {
-        const text = match[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        const text = decodeHtmlEntities(match[1].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
         if (text.length > 10) { fiscalImpact = text; break; }
       }
     }
@@ -272,7 +294,7 @@ class CASosClient {
       if (match) {
         const items = match[1].match(/<li[^>]*>([\s\S]*?)<\/li>/gi) || [];
         for (const item of items) {
-          const text = item.replace(/<[^>]+>/g, '').trim();
+          const text = decodeHtmlEntities(item.replace(/<[^>]+>/g, '')).trim();
           if (text && text.length > 2) names.push(text);
         }
         if (names.length > 0) break;
@@ -469,7 +491,7 @@ class CASosClient {
     let match;
     while ((match = propPattern.exec(html)) !== null) {
       const number = match[1];
-      let title = match[2].trim();
+      let title = decodeHtmlEntities(match[2]).trim();
 
       // Clean up the title - remove extra whitespace and newlines
       title = title.replace(/\s+/g, ' ').trim();
