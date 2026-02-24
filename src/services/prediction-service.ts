@@ -105,12 +105,12 @@ class PredictionService {
    *   n=5, 4 pass  → 71%
    *   n=10, 7 pass → 67%
    *
-   * Requires at least 3 comparisons — fewer is not enough data.
+   * Requires at least 2 comparisons — fewer is not enough data.
    */
   private calculateHistoricalFactor(
     comparisons: HistoricalComparison[]
   ): PredictionFactor | null {
-    if (comparisons.length < 3) return null;
+    if (comparisons.length < 2) return null;
 
     const passedCount = comparisons.filter(c => c.result === 'passed').length;
     // Bayesian posterior mean with uniform Beta(1,1) prior
@@ -179,9 +179,9 @@ class PredictionService {
         }
       }
 
-      // Fetch past propositions in parallel (limit to 4 years to stay fast)
+      // Fetch past propositions in parallel (limit to 6 years for more historical data)
       const yearResults = await Promise.all(
-        yearsToSearch.slice(0, 4).map(y =>
+        yearsToSearch.slice(0, 6).map(y =>
           caSosClient.getPropositionsByYear(y).catch(() => [])
         )
       );

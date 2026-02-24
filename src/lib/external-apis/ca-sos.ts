@@ -385,7 +385,7 @@ class CASosClient {
     const electionDates = this.generateElectionDates(year);
 
     // Fetch election results (CA SOS API + Ballotpedia) and Quick Guide pages in parallel
-    const emptyBpResults = { results: new Map<string, PropositionResult>(), statuses: new Map<string, boolean>() };
+    const emptyBpResults = { results: new Map<string, PropositionResult>(), statuses: new Map<string, boolean>(), titles: new Map<string, string>() };
     const [apiResults, bpData, ...htmlResults] = await Promise.all([
       this.fetchElectionResults().catch(() => new Map<string, ApiElectionResult>()),
       ballotpediaClient.fetchYearResults(year).catch(() => emptyBpResults),
@@ -433,7 +433,54 @@ class CASosClient {
       allPropositions.push(...propositions);
     }
 
-    return allPropositions;
+    // Quick Guide returned nothing (JS-rendered SPA) — build propositions from Ballotpedia
+    // results data so historical comparison and prediction still work.
+    if (allPropositions.length === 0) {
+      const electionDate = electionDates[0];
+
+      // Full results with vote data (2022+ pages)
+      bpData.results.forEach((result, propNumber) => {
+        const rawTitle = bpData.titles.get(propNumber) || `Proposition ${propNumber}`;
+        const title = this.cleanTitle(rawTitle, propNumber);
+        allPropositions.push({
+          id: `${year}-${propNumber}`,
+          number: propNumber,
+          year,
+          electionDate,
+          title,
+          summary: title,
+          status: result.passed ? 'passed' : 'failed',
+          category: this.inferCategory(title),
+          result,
+        });
+      });
+
+      // Status-only entries (older years without vote counts)
+      bpData.statuses.forEach((passed, propNumber) => {
+        if (allPropositions.some(p => p.number === propNumber)) return;
+        const rawTitle = bpData.titles.get(propNumber) || `Proposition ${propNumber}`;
+        const title = this.cleanTitle(rawTitle, propNumber);
+        allPropositions.push({
+          id: `${year}-${propNumber}`,
+          number: propNumber,
+          year,
+          electionDate,
+          title,
+          summary: title,
+          status: passed ? 'passed' : 'failed',
+          category: this.inferCategory(title),
+          // Vote percentages unavailable for older years; result is set so prediction
+          // service can use the pass/fail outcome for historical comparison.
+          result: { passed, yesVotes: 0, noVotes: 0, yesPercentage: 0, noPercentage: 0, totalVotes: 0, turnout: 0 },
+        });
+      });
+
+      if (allPropositions.length > 0) {
+        console.log(`[CA-SOS] Built ${allPropositions.length} propositions from Ballotpedia results for ${year}`);
+      }
+    }
+
+    return allPropositions.sort((a, b) => parseInt(a.number) - parseInt(b.number));
   }
 
   /**

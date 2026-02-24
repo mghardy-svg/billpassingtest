@@ -48,6 +48,8 @@ export interface BallotpediaYearResults {
   results: Map<string, PropositionResult>;
   /** Pass/fail status only, without vote counts (older year pages) */
   statuses: Map<string, boolean>;
+  /** Proposition titles keyed by number, extracted from the results table */
+  titles: Map<string, string>;
 }
 
 /** An upcoming measure scraped from Ballotpedia that hasn't been voted on yet */
@@ -330,6 +332,7 @@ class BallotpediaClient {
   private parseResultsTable(html: string): BallotpediaYearResults {
     const results = new Map<string, PropositionResult>();
     const statuses = new Map<string, boolean>();
+    const titles = new Map<string, string>();
 
     const rowPattern = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let rowMatch;
@@ -342,6 +345,15 @@ class BallotpediaClient {
       if (!propMatch) continue;
 
       const propNumber = propMatch[1];
+
+      // Extract the proposition title from the <a> link in this row
+      const titleLinkMatch = rowHtml.match(/<a[^>]+href="[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+      if (titleLinkMatch) {
+        const rawTitle = decodeHtmlEntities(titleLinkMatch[1].replace(/<[^>]+>/g, '')).trim();
+        if (rawTitle.length > 5) {
+          titles.set(propNumber, rawTitle);
+        }
+      }
 
       // Check for result: "Approved" or "Defeated" in alt text or link text
       const approved = /(?:alt|title)=["']?Approved["']?/i.test(rowHtml) ||
@@ -380,7 +392,7 @@ class BallotpediaClient {
       }
     }
 
-    return { results, statuses };
+    return { results, statuses, titles };
   }
 
   /**
