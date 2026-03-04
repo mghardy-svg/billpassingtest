@@ -385,7 +385,7 @@ class CASosClient {
     const electionDates = this.generateElectionDates(year);
 
     // Fetch election results (CA SOS API + Ballotpedia) and Quick Guide pages in parallel
-    const emptyBpResults = { results: new Map<string, PropositionResult>(), statuses: new Map<string, boolean>(), titles: new Map<string, string>() };
+    const emptyBpResults = { results: new Map<string, PropositionResult>(), statuses: new Map<string, boolean>(), titles: new Map<string, string>(), descriptions: new Map<string, string>(), subjects: new Map<string, string>() };
     const [apiResults, bpData, ...htmlResults] = await Promise.all([
       this.fetchElectionResults().catch(() => new Map<string, ApiElectionResult>()),
       ballotpediaClient.fetchYearResults(year).catch(() => emptyBpResults),
@@ -442,15 +442,17 @@ class CASosClient {
       bpData.results.forEach((result, propNumber) => {
         const rawTitle = bpData.titles.get(propNumber) || `Proposition ${propNumber}`;
         const title = this.cleanTitle(rawTitle, propNumber);
+        const description = bpData.descriptions.get(propNumber) || '';
+        const subject = bpData.subjects.get(propNumber) || '';
         allPropositions.push({
           id: `${year}-${propNumber}`,
           number: propNumber,
           year,
           electionDate,
           title,
-          summary: title,
+          summary: description || title,
           status: result.passed ? 'passed' : 'failed',
-          category: this.inferCategory(title),
+          category: this.inferCategoryFromSubjects([subject]) || this.inferCategory(title),
           result,
         });
       });
@@ -460,15 +462,17 @@ class CASosClient {
         if (allPropositions.some(p => p.number === propNumber)) return;
         const rawTitle = bpData.titles.get(propNumber) || `Proposition ${propNumber}`;
         const title = this.cleanTitle(rawTitle, propNumber);
+        const description = bpData.descriptions.get(propNumber) || '';
+        const subject = bpData.subjects.get(propNumber) || '';
         allPropositions.push({
           id: `${year}-${propNumber}`,
           number: propNumber,
           year,
           electionDate,
           title,
-          summary: title,
+          summary: description || title,
           status: passed ? 'passed' : 'failed',
-          category: this.inferCategory(title),
+          category: this.inferCategoryFromSubjects([subject]) || this.inferCategory(title),
           // Vote percentages unavailable for older years; result is set so prediction
           // service can use the pass/fail outcome for historical comparison.
           result: { passed, yesVotes: 0, noVotes: 0, yesPercentage: 0, noPercentage: 0, totalVotes: 0, turnout: 0 },
@@ -722,22 +726,22 @@ class CASosClient {
   }
 
   /**
-   * Get all available years with proposition data
-   * Includes even years (regular elections) and recent odd years (potential special elections)
+   * Get all years with California ballot measure data.
+   * Verified via Ballotpedia scrape on 2026-02-24: checked all years 1840–2026.
+   * 2026 included as the current upcoming election year (uses upcoming table format).
+   * Pre-initiative years (1886–1910) use "Amendment N" naming on Ballotpedia instead
+   * of "Proposition N"; the parser handles both formats.
    */
   async getAvailableYears(): Promise<number[]> {
-    const currentYear = new Date().getFullYear();
-    const years: number[] = [];
-
-    for (let y = currentYear + 1; y >= currentYear - 10; y--) {
-      // Even years always have regular elections
-      // Include recent odd years for potential special elections
-      if (y % 2 === 0 || y >= currentYear - 1) {
-        years.push(y);
-      }
-    }
-
-    return years.sort((a, b) => b - a);
+    return [
+      2026, 2025, 2024, 2022, 2020, 2018, 2016, 2014, 2013, 2012, 2010, 2009,
+      2008, 2006, 2005, 2004, 2003, 2002, 2000, 1998, 1996, 1994, 1993, 1992,
+      1990, 1988, 1986, 1984, 1982, 1980, 1979, 1978, 1976, 1974, 1973, 1972,
+      1970, 1968, 1966, 1964, 1962, 1960, 1958, 1956, 1954, 1952, 1950, 1949,
+      1948, 1946, 1944, 1942, 1940, 1939, 1938, 1936, 1935, 1934, 1933, 1932,
+      1930, 1928, 1926, 1924, 1922, 1920, 1919, 1918, 1916, 1915, 1914, 1912,
+      1911, 1910, 1908, 1898, 1896, 1892, 1886,
+    ];
   }
 
   /**

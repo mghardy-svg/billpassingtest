@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Proposition, PropositionPrediction } from '@/types';
 import { Card, CardContent, Badge } from '@/components/ui';
 import { formatDate, formatPercentage } from '@/lib/utils';
-import { Calendar, Users } from 'lucide-react';
+import { Calendar, Users, ExternalLink } from 'lucide-react';
 
 interface PropositionCardProps {
   proposition: Proposition;
@@ -44,6 +44,9 @@ export function PropositionCard({
                 Proposition {proposition.number}
               </h3>
               <p className="text-gray-600 mt-1 text-sm line-clamp-2">{proposition.title}</p>
+              {proposition.summary && proposition.summary !== proposition.title && proposition.status !== 'upcoming' && (
+                <p className="text-gray-500 mt-1 text-xs line-clamp-2">{proposition.summary}</p>
+              )}
             </div>
             <span className="text-4xl font-display font-bold text-gray-200 shrink-0">
               {proposition.number}
@@ -61,6 +64,16 @@ export function PropositionCard({
                 <span>{proposition.sponsors.length} sponsors</span>
               </div>
             )}
+            <a
+              href={`https://ballotpedia.org/California_${proposition.year}_ballot_propositions`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="flex items-center gap-1 text-blue-700 hover:text-blue-900 ml-auto"
+            >
+              <ExternalLink className="h-3 w-3" />
+              <span className="text-xs">Ballotpedia</span>
+            </a>
           </div>
 
           {showPrediction && prediction && (

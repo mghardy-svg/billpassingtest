@@ -34,8 +34,10 @@ class PropositionService {
       // Fetch from CA SOS
       const propositions = await caSosClient.getPropositionsByYear(year);
 
-      // Cache the results
-      this.setCache(cacheKey, propositions);
+      // Only cache non-empty results so a failed fetch doesn't poison the cache
+      if (propositions.length > 0) {
+        this.setCache(cacheKey, propositions);
+      }
 
       // Apply filters
       const filtered = this.filterPropositions(propositions, params);

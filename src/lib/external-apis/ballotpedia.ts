@@ -50,6 +50,10 @@ export interface BallotpediaYearResults {
   statuses: Map<string, boolean>;
   /** Proposition titles keyed by number, extracted from the results table */
   titles: Map<string, string>;
+  /** One-sentence description from the table's Description column */
+  descriptions: Map<string, string>;
+  /** Subject/topic from the table's Subject column (e.g. "Taxes", "Education") */
+  subjects: Map<string, string>;
 }
 
 /** An upcoming measure scraped from Ballotpedia that hasn't been voted on yet */
@@ -99,8 +103,9 @@ function extractDescription(rawText: string): string {
 
 class BallotpediaClient {
   private baseUrl: string;
-  private resultsCache: Map<number, BallotpediaYearResults> = new Map();
+  private resultsCache: Map<number, { data: BallotpediaYearResults; fetchedAt: number }> = new Map();
   private upcomingCache: Map<number, BallotpediaUpcomingMeasure[]> = new Map();
+  private static CACHE_TTL = 3_600_000; // 1 hour
 
   constructor() {
     this.baseUrl = BALLOTPEDIA_BASE;
@@ -117,7 +122,7 @@ class BallotpediaClient {
   async fetchYearResults(year: number): Promise<BallotpediaYearResults> {
     // Check cache first
     const cached = this.resultsCache.get(year);
-    if (cached) return cached;
+    if (cached && Date.now() - cached.fetchedAt < BallotpediaClient.CACHE_TTL) return cached.data;
 
     const url = `${this.baseUrl}/California_${year}_ballot_propositions`;
     console.log(`[Ballotpedia] Fetching year results: ${url}`);
@@ -136,18 +141,21 @@ class BallotpediaClient {
 
       if (!response.ok) {
         console.log(`[Ballotpedia] Year page returned ${response.status} for ${year}`);
-        return { results: new Map(), statuses: new Map() };
+        return { results: new Map(), statuses: new Map(), titles: new Map(), descriptions: new Map(), subjects: new Map() };
       }
 
       const html = await response.text();
       const parsed = this.parseResultsTable(html);
 
       console.log(`[Ballotpedia] Parsed ${parsed.results.size} full results, ${parsed.statuses.size} statuses for ${year}`);
-      this.resultsCache.set(year, parsed);
+      // Only cache non-empty results so a failed parse doesn't poison the cache
+      if (parsed.results.size > 0 || parsed.statuses.size > 0) {
+        this.resultsCache.set(year, { data: parsed, fetchedAt: Date.now() });
+      }
       return parsed;
     } catch (error) {
       console.error(`[Ballotpedia] Error fetching year results for ${year}:`, error);
-      return { results: new Map(), statuses: new Map() };
+      return { results: new Map(), statuses: new Map(), titles: new Map(), descriptions: new Map(), subjects: new Map() };
     }
   }
 
@@ -333,6 +341,8 @@ class BallotpediaClient {
     const results = new Map<string, PropositionResult>();
     const statuses = new Map<string, boolean>();
     const titles = new Map<string, string>();
+    const descriptions = new Map<string, string>();
+    const subjects = new Map<string, string>();
 
     const rowPattern = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let rowMatch;
@@ -340,18 +350,60 @@ class BallotpediaClient {
     while ((rowMatch = rowPattern.exec(html)) !== null) {
       const rowHtml = rowMatch[1];
 
-      // Extract proposition number from link text like "Proposition 36" or "Proposition 1"
-      const propMatch = rowHtml.match(/Proposition\s+(\d+)/i);
+      // Extract measure number.
+      // "Proposition N" can appear anywhere in the row (it's always in the title link).
+      // "Amendment N" is only matched when it appears as <a> link text (pre-initiative era
+      // California measures were named "Amendment N"). We avoid matching plain-text references
+      // to US constitutional amendments (e.g. "Amendment 14" in descriptions).
+      let propMatch = rowHtml.match(/Proposition\s+(\d+)/i);
+      if (!propMatch) {
+        propMatch = rowHtml.match(/<a[^>]*>[^<]*Amendment\s+(\d+)[^<]*<\/a>/i);
+      }
       if (!propMatch) continue;
 
       const propNumber = propMatch[1];
 
-      // Extract the proposition title from the <a> link in this row
-      const titleLinkMatch = rowHtml.match(/<a[^>]+href="[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+      // Extract all <td> cells from this row
+      const cellPattern = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+      const cells: string[] = [];
+      let cellMatch;
+      while ((cellMatch = cellPattern.exec(rowHtml)) !== null) {
+        cells.push(cellMatch[1]);
+      }
+
+      // Find the cell containing "Proposition N" or "Amendment N" as a link
+      // (typically cell[1] = Title column)
+      const titleCellIdx = cells.findIndex(c =>
+        /Proposition\s+\d+/i.test(c) || /<a[^>]*>[^<]*Amendment\s+\d+[^<]*<\/a>/i.test(c)
+      );
+      const effectiveTitleIdx = titleCellIdx >= 0 ? titleCellIdx : 1;
+
+      // Extract title from the <a> link inside the title cell
+      const titleCell = cells[effectiveTitleIdx] ?? rowHtml;
+      const titleLinkMatch = titleCell.match(/<a[^>]+href="[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
       if (titleLinkMatch) {
         const rawTitle = decodeHtmlEntities(titleLinkMatch[1].replace(/<[^>]+>/g, '')).trim();
-        if (rawTitle.length > 5) {
-          titles.set(propNumber, rawTitle);
+        if (rawTitle.length > 5) titles.set(propNumber, rawTitle);
+      }
+
+      // Detect column layout:
+      // Modern (7 cells, 2022+):  Type | Title | Subject | Description | Result | Yes | No
+      // Older  (6 cells):         Type | Title | Description | Result | Yes | No
+      // The Subject column is short (< 80 chars); Description is longer.
+      if (effectiveTitleIdx + 1 < cells.length) {
+        const nextCellText = decodeHtmlEntities(cells[effectiveTitleIdx + 1].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+        if (nextCellText.length > 0 && nextCellText.length <= 80) {
+          // Format A — cells[eff+1] is Subject, cells[eff+2] is Description
+          subjects.set(propNumber, nextCellText);
+          if (effectiveTitleIdx + 2 < cells.length) {
+            const rawDesc = decodeHtmlEntities(cells[effectiveTitleIdx + 2].replace(/<[^>]+>/g, ''));
+            const desc = extractDescription(rawDesc);
+            if (desc.length > 10) descriptions.set(propNumber, desc);
+          }
+        } else if (nextCellText.length > 80) {
+          // Format B — cells[eff+1] IS the Description (no Subject column)
+          const desc = extractDescription(nextCellText);
+          if (desc.length > 10) descriptions.set(propNumber, desc);
         }
       }
 
@@ -392,7 +444,7 @@ class BallotpediaClient {
       }
     }
 
-    return { results, statuses, titles };
+    return { results, statuses, titles, descriptions, subjects };
   }
 
   /**
