@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { PropositionCard } from '@/components/features';
 import {
   Card,
@@ -30,11 +30,52 @@ const categories: { value: PropositionCategory | 'all'; label: string }[] = [
   { value: 'civil_rights', label: 'Civil Rights' },
 ];
 
+const FALLBACK_YEARS = ['2026', '2025', '2024', '2022', '2020', '2018', '2016'];
+const YEARS_PER_BATCH = 5;
+
+async function fetchYearPropositions(year: string): Promise<Proposition[]> {
+  try {
+    const res = await fetch(`/api/propositions?year=${year}&perPage=200`);
+    const data: ApiResponse<Proposition[]> = await res.json();
+    return data.success ? data.data : [];
+  } catch {
+    return [];
+  }
+}
+
+function sortPropositions(props: Proposition[]): Proposition[] {
+  return [...props].sort((a, b) => {
+    if (b.year !== a.year) return b.year - a.year;
+    return parseInt(a.number) - parseInt(b.number);
+  });
+}
+
+async function loadPredictions(
+  props: Proposition[]
+): Promise<Record<string, PropositionPrediction>> {
+  const upcoming = props.filter(p => p.status === 'upcoming');
+  const results = await Promise.all(
+    upcoming.map(async (prop) => {
+      try {
+        const res = await fetch(`/api/predictions/${prop.id}`);
+        const data = await res.json();
+        if (data.success) return { id: prop.id, prediction: data.data };
+      } catch { /* ignore */ }
+      return null;
+    })
+  );
+  const map: Record<string, PropositionPrediction> = {};
+  results.forEach(r => { if (r) map[r.id] = r.prediction; });
+  return map;
+}
+
 export default function PropositionsPage() {
   const [propositions, setPropositions] = useState<Proposition[]>([]);
   const [predictions, setPredictions] = useState<Record<string, PropositionPrediction>>({});
   const [availableYears, setAvailableYears] = useState<string[]>([]);
+  const [yearsLoaded, setYearsLoaded] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -42,93 +83,81 @@ export default function PropositionsPage() {
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
 
+  // Stable ref for availableYears to use in handlers without stale closures
+  const availableYearsRef = useRef<string[]>([]);
+  availableYearsRef.current = availableYears;
+
   // Load available years once on mount
   useEffect(() => {
     fetch('/api/propositions/years')
       .then(r => r.json())
       .then((data: ApiResponse<number[]>) => {
-        if (data.success) {
-          setAvailableYears(data.data.map(String));
-        }
+        if (data.success) setAvailableYears(data.data.map(String));
       })
       .catch(() => {});
   }, []);
 
-  // Fetch propositions from API
+  // Initial load / reset when year filter or available years change
   useEffect(() => {
-    const fetchPropositions = async () => {
+    const load = async () => {
       setIsLoading(true);
       setError(null);
+      setPropositions([]);
+      setPredictions({});
+      setYearsLoaded(0);
 
       try {
-        let allPropositions: Proposition[] = [];
+        let loaded: Proposition[] = [];
 
-        if (selectedYear === 'all') {
-          // Only fetch years that actually have proposition data
-          const yearsToFetch = availableYears.length > 0
-            ? availableYears
-            : ['2026', '2025', '2024', '2022', '2020', '2018', '2016'];
-          const results = await Promise.all(
-            yearsToFetch.map(async (year) => {
-              const response = await fetch(`/api/propositions?year=${year}&perPage=200`);
-              const data: ApiResponse<Proposition[]> = await response.json();
-              return data.success ? data.data : [];
-            })
-          );
-          allPropositions = results.flat();
+        if (selectedYear !== 'all') {
+          const data = await fetchYearPropositions(selectedYear);
+          loaded = data;
+          setYearsLoaded(1);
         } else {
-          const response = await fetch(`/api/propositions?year=${selectedYear}&perPage=200`);
-          const data: ApiResponse<Proposition[]> = await response.json();
-
-          if (data.success) {
-            allPropositions = data.data;
-          } else {
-            setError(data.error?.message || 'Failed to fetch propositions');
-            setIsLoading(false);
-            return;
-          }
+          const yearsSource = availableYears.length > 0 ? availableYears : FALLBACK_YEARS;
+          const batch = yearsSource.slice(0, YEARS_PER_BATCH);
+          const results = await Promise.all(batch.map(fetchYearPropositions));
+          loaded = results.flat();
+          setYearsLoaded(batch.length);
         }
 
-        // Sort by year (newest first) then by number
-        allPropositions.sort((a, b) => {
-          if (b.year !== a.year) return b.year - a.year;
-          return parseInt(a.number) - parseInt(b.number);
-        });
-
-        setPropositions(allPropositions);
-
-        // Fetch predictions for upcoming propositions
-        const upcoming = allPropositions.filter(p => p.status === 'upcoming');
-        const predictionPromises = upcoming.map(async (prop) => {
-          try {
-            const predResponse = await fetch(`/api/predictions/${prop.id}`);
-            const predData = await predResponse.json();
-            if (predData.success) {
-              return { id: prop.id, prediction: predData.data };
-            }
-          } catch {
-            // Ignore prediction errors
-          }
-          return null;
-        });
-
-        const predResults = await Promise.all(predictionPromises);
-        const predMap: Record<string, PropositionPrediction> = {};
-        predResults.forEach(result => {
-          if (result) {
-            predMap[result.id] = result.prediction;
-          }
-        });
-        setPredictions(predMap);
-      } catch (err) {
+        const sorted = sortPropositions(loaded);
+        setPropositions(sorted);
+        const preds = await loadPredictions(sorted);
+        setPredictions(preds);
+      } catch {
         setError('Network error. Please try again.');
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchPropositions();
+    load();
   }, [selectedYear, availableYears]);
+
+  // Load the next batch of years and append results
+  const handleLoadMore = async () => {
+    if (isLoadingMore) return;
+    const yearsSource = availableYearsRef.current.length > 0
+      ? availableYearsRef.current
+      : FALLBACK_YEARS;
+    const nextBatch = yearsSource.slice(yearsLoaded, yearsLoaded + YEARS_PER_BATCH);
+    if (nextBatch.length === 0) return;
+
+    setIsLoadingMore(true);
+    try {
+      const results = await Promise.all(nextBatch.map(fetchYearPropositions));
+      const newProps = results.flat();
+      setPropositions(prev => sortPropositions([...prev, ...newProps]));
+      setYearsLoaded(prev => prev + nextBatch.length);
+      const preds = await loadPredictions(newProps);
+      setPredictions(prev => ({ ...prev, ...preds }));
+    } catch { /* ignore */ }
+    setIsLoadingMore(false);
+  };
+
+  const yearsSource = availableYears.length > 0 ? availableYears : FALLBACK_YEARS;
+  const hasMoreYears = selectedYear === 'all' && yearsLoaded < yearsSource.length;
 
   // Filter propositions client-side for immediate response
   const filteredPropositions = propositions.filter((prop) => {
@@ -300,6 +329,11 @@ export default function PropositionsPage() {
               <div className="mb-6 flex items-center justify-between">
                 <p className="text-gray-600 font-medium">
                   Showing {filteredPropositions.length} propositions
+                  {hasMoreYears && (
+                    <span className="text-gray-400 ml-1">
+                      (years {yearsSource[0]}–{yearsSource[yearsLoaded - 1]})
+                    </span>
+                  )}
                 </p>
                 {filteredPropositions.length > 0 && (
                   <div className="flex gap-2">
@@ -328,6 +362,34 @@ export default function PropositionsPage() {
                       showPrediction={proposition.status === 'upcoming'}
                     />
                   ))}
+                </div>
+              )}
+
+              {/* Load More Years */}
+              {hasMoreYears && (
+                <div className="mt-10 flex flex-col items-center gap-2">
+                  <button
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
+                    className="px-8 py-3 bg-blue-900 text-white font-semibold rounded hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {isLoadingMore ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading older years...
+                      </>
+                    ) : (
+                      <>
+                        Load older years
+                        <span className="text-blue-300 text-sm font-normal">
+                          (next: {yearsSource[yearsLoaded]}–{yearsSource[Math.min(yearsLoaded + YEARS_PER_BATCH - 1, yearsSource.length - 1)]})
+                        </span>
+                      </>
+                    )}
+                  </button>
+                  <p className="text-xs text-gray-400">
+                    {yearsLoaded} of {yearsSource.length} years loaded
+                  </p>
                 </div>
               )}
             </>
