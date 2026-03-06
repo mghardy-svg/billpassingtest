@@ -31,7 +31,8 @@ const categories: { value: PropositionCategory | 'all'; label: string }[] = [
 ];
 
 const FALLBACK_YEARS = ['2026', '2025', '2024', '2022', '2020', '2018', '2016'];
-const YEARS_PER_BATCH = 5;
+const INITIAL_BATCH = 5;
+const BG_BATCH = 5;
 
 async function fetchYearPropositions(year: string): Promise<Proposition[]> {
   try {
@@ -74,8 +75,9 @@ export default function PropositionsPage() {
   const [predictions, setPredictions] = useState<Record<string, PropositionPrediction>>({});
   const [availableYears, setAvailableYears] = useState<string[]>([]);
   const [yearsLoaded, setYearsLoaded] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [totalYears, setTotalYears] = useState(0);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -83,9 +85,11 @@ export default function PropositionsPage() {
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
 
-  // Stable ref for availableYears to use in handlers without stale closures
   const availableYearsRef = useRef<string[]>([]);
   availableYearsRef.current = availableYears;
+
+  // Each new load gets a unique key; background loops check this to know when to stop
+  const loadingKeyRef = useRef(0);
 
   // Load available years once on mount
   useEffect(() => {
@@ -97,82 +101,102 @@ export default function PropositionsPage() {
       .catch(() => {});
   }, []);
 
-  // Initial load / reset when year filter or available years change
+  // Load / reload whenever the year filter or available-years list changes
   useEffect(() => {
+    const currentKey = ++loadingKeyRef.current;
+
     const load = async () => {
-      setIsLoading(true);
+      setIsInitialLoading(true);
+      setIsBackgroundLoading(false);
       setError(null);
       setPropositions([]);
       setPredictions({});
       setYearsLoaded(0);
 
       try {
-        let loaded: Proposition[] = [];
-
         if (selectedYear !== 'all') {
-          const data = await fetchYearPropositions(selectedYear);
-          loaded = data;
+          // Single year – fetch everything at once
+          const props = await fetchYearPropositions(selectedYear);
+          if (loadingKeyRef.current !== currentKey) return;
+          const sorted = sortPropositions(props);
+          setPropositions(sorted);
           setYearsLoaded(1);
+          setTotalYears(1);
+          setIsInitialLoading(false);
+          const preds = await loadPredictions(sorted);
+          if (loadingKeyRef.current !== currentKey) return;
+          setPredictions(preds);
         } else {
-          const yearsSource = availableYears.length > 0 ? availableYears : FALLBACK_YEARS;
-          const batch = yearsSource.slice(0, YEARS_PER_BATCH);
-          const results = await Promise.all(batch.map(fetchYearPropositions));
-          loaded = results.flat();
-          setYearsLoaded(batch.length);
-        }
+          const yearsSource = availableYearsRef.current.length > 0
+            ? availableYearsRef.current
+            : FALLBACK_YEARS;
+          setTotalYears(yearsSource.length);
 
-        const sorted = sortPropositions(loaded);
-        setPropositions(sorted);
-        const preds = await loadPredictions(sorted);
-        setPredictions(preds);
+          // ── Phase 1: show the first batch immediately ──
+          const initialBatch = yearsSource.slice(0, INITIAL_BATCH);
+          const initResults = await Promise.all(initialBatch.map(fetchYearPropositions));
+          if (loadingKeyRef.current !== currentKey) return;
+
+          const initProps = sortPropositions(initResults.flat());
+          setPropositions(initProps);
+          setYearsLoaded(INITIAL_BATCH);
+          setIsInitialLoading(false);
+
+          // Predictions for initial batch (non-blocking)
+          loadPredictions(initProps).then(preds => {
+            if (loadingKeyRef.current === currentKey)
+              setPredictions(preds);
+          });
+
+          // ── Phase 2: load remaining years in the background ──
+          if (yearsSource.length > INITIAL_BATCH) {
+            setIsBackgroundLoading(true);
+            let loaded = INITIAL_BATCH;
+
+            for (let i = INITIAL_BATCH; i < yearsSource.length; i += BG_BATCH) {
+              if (loadingKeyRef.current !== currentKey) return;
+
+              const batch = yearsSource.slice(i, i + BG_BATCH);
+              const batchResults = await Promise.all(batch.map(fetchYearPropositions));
+              if (loadingKeyRef.current !== currentKey) return;
+
+              const newProps = batchResults.flat();
+              loaded += batch.length;
+              setPropositions(prev => sortPropositions([...prev, ...newProps]));
+              setYearsLoaded(loaded);
+
+              // Predictions for newly loaded upcoming props (non-blocking)
+              loadPredictions(newProps).then(preds => {
+                if (loadingKeyRef.current === currentKey)
+                  setPredictions(prev => ({ ...prev, ...preds }));
+              });
+            }
+
+            if (loadingKeyRef.current === currentKey)
+              setIsBackgroundLoading(false);
+          }
+        }
       } catch {
-        setError('Network error. Please try again.');
-      } finally {
-        setIsLoading(false);
+        if (loadingKeyRef.current === currentKey) {
+          setError('Network error. Please try again.');
+          setIsInitialLoading(false);
+          setIsBackgroundLoading(false);
+        }
       }
     };
 
     load();
   }, [selectedYear, availableYears]);
 
-  // Load the next batch of years and append results
-  const handleLoadMore = async () => {
-    if (isLoadingMore) return;
-    const yearsSource = availableYearsRef.current.length > 0
-      ? availableYearsRef.current
-      : FALLBACK_YEARS;
-    const nextBatch = yearsSource.slice(yearsLoaded, yearsLoaded + YEARS_PER_BATCH);
-    if (nextBatch.length === 0) return;
-
-    setIsLoadingMore(true);
-    try {
-      const results = await Promise.all(nextBatch.map(fetchYearPropositions));
-      const newProps = results.flat();
-      setPropositions(prev => sortPropositions([...prev, ...newProps]));
-      setYearsLoaded(prev => prev + nextBatch.length);
-      const preds = await loadPredictions(newProps);
-      setPredictions(prev => ({ ...prev, ...preds }));
-    } catch { /* ignore */ }
-    setIsLoadingMore(false);
-  };
-
-  const yearsSource = availableYears.length > 0 ? availableYears : FALLBACK_YEARS;
-  const hasMoreYears = selectedYear === 'all' && yearsLoaded < yearsSource.length;
-
-  // Filter propositions client-side for immediate response
+  // Client-side filtering (instant)
   const filteredPropositions = propositions.filter((prop) => {
     const matchesSearch =
       searchQuery === '' ||
       prop.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       prop.summary.toLowerCase().includes(searchQuery.toLowerCase()) ||
       prop.number.includes(searchQuery);
-
-    const matchesCategory =
-      selectedCategory === 'all' || prop.category === selectedCategory;
-
-    const matchesStatus =
-      selectedStatus === 'all' || prop.status === selectedStatus;
-
+    const matchesCategory = selectedCategory === 'all' || prop.category === selectedCategory;
+    const matchesStatus = selectedStatus === 'all' || prop.status === selectedStatus;
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
@@ -180,9 +204,11 @@ export default function PropositionsPage() {
   const passedCount = filteredPropositions.filter((p) => p.status === 'passed').length;
   const failedCount = filteredPropositions.filter((p) => p.status === 'failed').length;
 
+  const loadProgress = totalYears > 0 ? Math.round((yearsLoaded / totalYears) * 100) : 0;
+
   return (
     <div className="animate-fade-in bg-white">
-      {/* Header Section */}
+      {/* Header */}
       <section className="bg-white py-12 border-b-4 border-blue-900">
         <div className="container mx-auto px-4">
           <div className="max-w-4xl">
@@ -209,7 +235,7 @@ export default function PropositionsPage() {
                 <BarChart3 className="h-6 w-6 text-blue-900" />
               </div>
               <p className="text-3xl font-bold text-gray-900 text-center">
-                {isLoading ? '-' : filteredPropositions.length}
+                {isInitialLoading ? '-' : filteredPropositions.length}
               </p>
               <p className="text-sm text-gray-600 text-center mt-1">Total Propositions</p>
             </div>
@@ -218,7 +244,7 @@ export default function PropositionsPage() {
                 <TrendingUp className="h-6 w-6 text-blue-900" />
               </div>
               <p className="text-3xl font-bold text-blue-900 text-center">
-                {isLoading ? '-' : upcomingCount}
+                {isInitialLoading ? '-' : upcomingCount}
               </p>
               <p className="text-sm text-gray-600 text-center mt-1">Upcoming</p>
             </div>
@@ -227,7 +253,7 @@ export default function PropositionsPage() {
                 <CheckCircle className="h-6 w-6 text-green-700" />
               </div>
               <p className="text-3xl font-bold text-green-700 text-center">
-                {isLoading ? '-' : passedCount}
+                {isInitialLoading ? '-' : passedCount}
               </p>
               <p className="text-sm text-gray-600 text-center mt-1">Passed</p>
             </div>
@@ -236,7 +262,7 @@ export default function PropositionsPage() {
                 <XCircle className="h-6 w-6 text-red-700" />
               </div>
               <p className="text-3xl font-bold text-red-700 text-center">
-                {isLoading ? '-' : failedCount}
+                {isInitialLoading ? '-' : failedCount}
               </p>
               <p className="text-sm text-gray-600 text-center mt-1">Failed</p>
             </div>
@@ -308,7 +334,7 @@ export default function PropositionsPage() {
             </CardContent>
           </Card>
 
-          {/* Error State */}
+          {/* Error */}
           {error && (
             <Card className="mb-8 border-2 border-red-300 bg-red-50">
               <CardContent className="py-4 text-center text-red-700 font-medium">
@@ -317,23 +343,37 @@ export default function PropositionsPage() {
             </Card>
           )}
 
-          {/* Loading State */}
-          {isLoading ? (
+          {/* Background loading progress bar */}
+          {isBackgroundLoading && (
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-gray-500 flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading historical data… {yearsLoaded} / {totalYears} years
+                </span>
+                <span className="text-xs text-gray-400">{loadProgress}%</span>
+              </div>
+              <div className="h-1 bg-gray-100 rounded overflow-hidden">
+                <div
+                  className="h-full bg-blue-900 transition-all duration-500"
+                  style={{ width: `${loadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Initial loading spinner */}
+          {isInitialLoading ? (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="h-8 w-8 animate-spin text-blue-900" />
-              <span className="ml-3 text-gray-700 font-medium">Loading propositions...</span>
+              <span className="ml-3 text-gray-700 font-medium">Loading propositions…</span>
             </div>
           ) : (
             <>
-              {/* Results Header */}
+              {/* Results header */}
               <div className="mb-6 flex items-center justify-between">
                 <p className="text-gray-600 font-medium">
                   Showing {filteredPropositions.length} propositions
-                  {hasMoreYears && (
-                    <span className="text-gray-400 ml-1">
-                      (years {yearsSource[0]}–{yearsSource[yearsLoaded - 1]})
-                    </span>
-                  )}
                 </p>
                 {filteredPropositions.length > 0 && (
                   <div className="flex gap-2">
@@ -362,34 +402,6 @@ export default function PropositionsPage() {
                       showPrediction={proposition.status === 'upcoming'}
                     />
                   ))}
-                </div>
-              )}
-
-              {/* Load More Years */}
-              {hasMoreYears && (
-                <div className="mt-10 flex flex-col items-center gap-2">
-                  <button
-                    onClick={handleLoadMore}
-                    disabled={isLoadingMore}
-                    className="px-8 py-3 bg-blue-900 text-white font-semibold rounded hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                  >
-                    {isLoadingMore ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading older years...
-                      </>
-                    ) : (
-                      <>
-                        Load older years
-                        <span className="text-blue-300 text-sm font-normal">
-                          (next: {yearsSource[yearsLoaded]}–{yearsSource[Math.min(yearsLoaded + YEARS_PER_BATCH - 1, yearsSource.length - 1)]})
-                        </span>
-                      </>
-                    )}
-                  </button>
-                  <p className="text-xs text-gray-400">
-                    {yearsLoaded} of {yearsSource.length} years loaded
-                  </p>
                 </div>
               )}
             </>

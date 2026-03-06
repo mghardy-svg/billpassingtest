@@ -102,22 +102,26 @@ export function PropositionCard({
 
           {proposition.result && (
             <div className="p-4 bg-gray-50 rounded border border-gray-200">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700">Final Result</span>
                 <Badge className={`${proposition.result.passed ? 'bg-green-700' : 'bg-red-700'} text-white border-0`}>
                   {proposition.result.passed ? 'Passed' : 'Failed'}
                 </Badge>
               </div>
-              <div className="h-3 bg-red-200 rounded overflow-hidden">
-                <div
-                  className="h-full bg-green-600"
-                  style={{ width: `${proposition.result.yesPercentage}%` }}
-                />
-              </div>
-              <div className="flex justify-between mt-2 text-xs font-medium">
-                <span className="text-green-700">Yes {proposition.result.yesPercentage.toFixed(1)}%</span>
-                <span className="text-red-700">No {proposition.result.noPercentage.toFixed(1)}%</span>
-              </div>
+              {proposition.result.yesPercentage > 0 && (
+                <>
+                  <div className="h-3 bg-red-200 rounded overflow-hidden mt-3">
+                    <div
+                      className="h-full bg-green-600"
+                      style={{ width: `${proposition.result.yesPercentage}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between mt-2 text-xs font-medium">
+                    <span className="text-green-700">Yes {proposition.result.yesPercentage.toFixed(1)}%</span>
+                    <span className="text-red-700">No {proposition.result.noPercentage.toFixed(1)}%</span>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </CardContent>
