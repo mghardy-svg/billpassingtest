@@ -1,3 +1,5 @@
+npm install d3 topojson-client
+npm install --save-dev @types/d3 @types/topojson-client
 {
   "name": "california-proposition-predictor",
   "version": "0.1.0",
